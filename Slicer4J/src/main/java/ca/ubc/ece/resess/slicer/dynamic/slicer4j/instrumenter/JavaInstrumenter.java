@@ -1,6 +1,5 @@
 package ca.ubc.ece.resess.slicer.dynamic.slicer4j.instrumenter;
 
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -67,18 +66,17 @@ public class JavaInstrumenter extends Instrumenter {
         this.jarName = new File(jarName).getAbsolutePath();
     }
 
-
     void initialize(String jarPath, String loggerJar) {
         AnalysisLogger.log(true, "Initializing Instrumenter");
         createInstrumentationPackagesList();
-        Scene.v().addBasicClass("java.io.PrintStream",SootClass.SIGNATURES);
-        Scene.v().addBasicClass("java.lang.System",SootClass.SIGNATURES);
+        Scene.v().addBasicClass("java.io.PrintStream", SootClass.SIGNATURES);
+        Scene.v().addBasicClass("java.lang.System", SootClass.SIGNATURES);
         Scene.v().addBasicClass("DynamicSlicingLogger", SootClass.BODIES);
         Scene.v().addBasicClass("DynamicSlicingLoggerWriter", SootClass.BODIES);
         Scene.v().addBasicClass("DynamicSlicingLoggerShutdown", SootClass.BODIES);
         Options.v().set_prepend_classpath(true);
         // Options.v().set_soot_classpath("VIRTUAL_FS_FOR_JDK");
-        String [] excList = {"org.slf4j.impl.*", "org.mozilla.*"};
+        String[] excList = { "org.slf4j.impl.*", "org.mozilla.*" };
         List<String> excludePackagesList = Arrays.asList(excList);
         Options.v().set_exclude(excludePackagesList);
         Options.v().set_no_bodies_for_excluded(true);
@@ -92,8 +90,34 @@ public class JavaInstrumenter extends Instrumenter {
         AnalysisLogger.log(true, "Initialization done");
     }
 
+    void initialize(List<String> jarPaths, String loggerJar) {
+        jarPaths.add(loggerJar);
+
+        AnalysisLogger.log(true, "Initializing Instrumenter");
+        createInstrumentationPackagesList();
+        Scene.v().addBasicClass("java.io.PrintStream", SootClass.SIGNATURES);
+        Scene.v().addBasicClass("java.lang.System", SootClass.SIGNATURES);
+        Scene.v().addBasicClass("DynamicSlicingLogger", SootClass.BODIES);
+        Scene.v().addBasicClass("DynamicSlicingLoggerWriter", SootClass.BODIES);
+        Scene.v().addBasicClass("DynamicSlicingLoggerShutdown", SootClass.BODIES);
+        Options.v().set_prepend_classpath(true);
+        // Options.v().set_soot_classpath("VIRTUAL_FS_FOR_JDK");
+        String[] excList = { "org.slf4j.impl.*", "org.mozilla.*" };
+        List<String> excludePackagesList = Arrays.asList(excList);
+        Options.v().set_exclude(excludePackagesList);
+        Options.v().set_no_bodies_for_excluded(true);
+        Options.v().set_allow_phantom_refs(true);
+        Options.v().set_process_dir(jarPaths);
+        Options.v().set_output_format(Options.output_format_class);
+        Options.v().set_output_dir(Slicer.SOOT_OUTPUT_STRING);
+        Options.v().setPhaseOption("jb", "use-original-names:true");
+        Options.v().set_keep_line_number(true);
+        libClasses = Scene.v().getLibraryClasses();
+        AnalysisLogger.log(true, "Initialization done");
+    }
+
     void runMethodTransformationPack() {
-        PackManager.v().getPack("wjpp").add(new Transform("wjpp.classadder", new SceneTransformer(){
+        PackManager.v().getPack("wjpp").add(new Transform("wjpp.classadder", new SceneTransformer() {
             @Override
             protected void internalTransform(String phaseName, Map<String, String> options) {
                 Scene.v().getSootClass("DynamicSlicingLogger").setApplicationClass();
@@ -102,11 +126,32 @@ public class JavaInstrumenter extends Instrumenter {
             }
         }));
 
-
         PackManager.v().getPack("jtp").add(new Transform("jtp.myInstrumenter", new BodyTransformer() {
             @Override
-            protected void internalTransform(final Body b, String phaseName, @SuppressWarnings("rawtypes") Map options) {
+            protected void internalTransform(final Body b, String phaseName,
+                    @SuppressWarnings("rawtypes") Map options) {
                 SootClass cls = b.getMethod().getDeclaringClass();
+
+                boolean hasPathReference = false;
+                for (SootMethod method : cls.getMethods()) {
+                    if (method.hasActiveBody()) {
+                        for (Unit unit : method.getActiveBody().getUnits()) {
+                            if (unit.toString().contains("org.apache.hadoop.fs.Path")) {
+                                hasPathReference = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasPathReference)
+                        break;
+                }
+
+                if (!hasPathReference) {
+                    AnalysisLogger.log(true, "Skipping class {} because it does not contain a reference to Path",
+                            cls.getName());
+                    return;
+                }
+
                 if (cls.getName().contains("DynamicSlicingLogger")) {
                     return;
                 }
@@ -118,8 +163,8 @@ public class JavaInstrumenter extends Instrumenter {
                 }
 
                 boolean skip = !JavaInstrumenter.this.instrumentationPackagesList.isEmpty();
-                for (String includedPkg: JavaInstrumenter.this.instrumentationPackagesList) {
-                    if (cls.getPackageName().startsWith(includedPkg) ) {
+                for (String includedPkg : JavaInstrumenter.this.instrumentationPackagesList) {
+                    if (cls.getPackageName().startsWith(includedPkg)) {
                         skip = false;
                     }
                 }
@@ -135,7 +180,6 @@ public class JavaInstrumenter extends Instrumenter {
                 if (cls.getName().contains("OutputStream") && mtd.getName().contains("write")) {
                     return;
                 }
-
 
                 boolean isOnDestroy = false;
                 if (mtd.getName().equals("onDestroy")) {
@@ -157,10 +201,8 @@ public class JavaInstrumenter extends Instrumenter {
                     flags.timeTracking = false;
                 }
 
-
-
                 List<String> traps = new ArrayList<>();
-                for (Trap trap: mtd.getActiveBody().getTraps()) {
+                for (Trap trap : mtd.getActiveBody().getTraps()) {
                     traps.add(trap.getBeginUnit().toString());
                 }
                 // AnalysisLogger.log(true, "Traps of {} are {}", mtd, traps);
@@ -171,10 +213,11 @@ public class JavaInstrumenter extends Instrumenter {
                 LinkedHashMap<Unit, Long> unitNumMap = new LinkedHashMap<>();
                 Map<Unit, Long> taggedUnits = new HashMap<>();
                 // AnalysisLogger.log(true, "In method: {}", mtd);
-                for(Iterator<Unit> iter = units.snapshotIterator(); iter.hasNext();) {
+                for (Iterator<Unit> iter = units.snapshotIterator(); iter.hasNext();) {
                     final Unit u = (Unit) iter.next();
                     if (!(u instanceof IdentityStmt)) {
-                        instrumentedFirst = InstrumenterUtils.basicBlockInstrument(b, cls, mtd, isOnDestroy, addedLocals, flags, units,
+                        instrumentedFirst = InstrumenterUtils.basicBlockInstrument(b, cls, mtd, isOnDestroy,
+                                addedLocals, flags, units,
                                 instrumentedUnits, instrumentedFirst, unitNumMap, taggedUnits, u, traps,
                                 globalLineCounter, threadMethods, libClasses);
                         methodSize += 1;
@@ -193,13 +236,14 @@ public class JavaInstrumenter extends Instrumenter {
                         continue;
                     }
                     if (taggedUnits.containsKey(u)) {
-                        if (!key.equals("")){
+                        if (!key.equals("")) {
                             job.put(key, jArray);
                             jArray = new JSONArray();
                         }
                         key = taggedUnits.get(u).toString();
-                    } else if (prevU != null && (prevU instanceof ReturnStmt || prevU instanceof ReturnVoidStmt || prevU instanceof ThrowStmt)) {
-                        if (!key.equals("")){
+                    } else if (prevU != null && (prevU instanceof ReturnStmt || prevU instanceof ReturnVoidStmt
+                            || prevU instanceof ThrowStmt)) {
+                        if (!key.equals("")) {
                             job.put(key, jArray);
                             jArray = new JSONArray();
                         }
@@ -217,7 +261,7 @@ public class JavaInstrumenter extends Instrumenter {
                     job.put(key, jArray);
                 }
 
-                synchronized(staticLog){
+                synchronized (staticLog) {
                     staticLog.put(b.getMethod().getSignature(), job);
                 }
             }
@@ -226,7 +270,7 @@ public class JavaInstrumenter extends Instrumenter {
     }
 
     @Override
-    public void start (String options, String staticLogFile, String jarPath, String loggerJar) {
+    public void start(String options, String staticLogFile, String jarPath, String loggerJar) {
         soot.G.reset();
         if (options.contains("field")) {
             this.fieldTracking = true;
@@ -241,12 +285,24 @@ public class JavaInstrumenter extends Instrumenter {
             this.isOriginal = true;
         }
 
-        initialize(jarPath, loggerJar);
+        if (jarPath.contains(".jar")) {
+            initialize(jarPath, loggerJar);
+        } else {
+            List<String> jarPaths = new ArrayList<>();
+            // add all jars in the directory and subdirectories
+            File dir = new File(jarPath);
+            List<File> jarFiles = new ArrayList<>();
+            findJarsInDir(dir, jarFiles);
+            for (File jar : jarFiles) {
+                jarPaths.add(jar.getAbsolutePath());
+            }
+            initialize(jarPaths, loggerJar);
+        }
+
         runMethodTransformationPack();
         Scene.v().loadNecessaryClasses();
         AnalysisLogger.log(true, "Running packs ... ");
         PackManager.v().runPacks();
-
 
         AnalysisLogger.log(true, "Writing names of instrumented classes ... ");
         File classesFile = new File(new File(jarName).getParentFile().getAbsolutePath() + "/instr-classes.txt");
@@ -281,8 +337,6 @@ public class JavaInstrumenter extends Instrumenter {
             throw new Error("Failed to write static log file");
         }
 
-
-
         AnalysisLogger.log(true, "Number of Jimple statements (jarSize): {}", jarSize.toString());
         AnalysisLogger.log(true, "Writing JAR");
         try {
@@ -298,40 +352,74 @@ public class JavaInstrumenter extends Instrumenter {
                     dir.mkdirs();
                 }
 
-
                 AnalysisLogger.log(true, "Writing size file ... ");
                 File sizeFile = new File(dir.getAbsolutePath() + "/jar-size.txt");
                 try {
                     sizeFile.delete();
-                    FileUtils.writeStringToFile(sizeFile, "Number of Jimple statements (jarSize): " + jarSize.toString(), "UTF-8", true);
+                    FileUtils.writeStringToFile(sizeFile,
+                            "Number of Jimple statements (jarSize): " + jarSize.toString(), "UTF-8", true);
                 } catch (IOException e) {
                     throw new Error("Failed to write jar-size file");
                 }
 
                 List<String> instrumentedClasses = new ArrayList<>();
-                listDirectory(new File(Slicer.SOOT_OUTPUT_STRING).getAbsolutePath()+1, Slicer.SOOT_OUTPUT_STRING, 0, instrumentedClasses);
+                listDirectory(new File(Slicer.SOOT_OUTPUT_STRING).getAbsolutePath() + 1, Slicer.SOOT_OUTPUT_STRING, 0,
+                        instrumentedClasses);
 
                 AnalysisLogger.log(true, "Number of classes: {}", instrumentedClasses.size());
                 int numFiles = 100;
-                for (int i = 0; i < instrumentedClasses.size(); i+=numFiles){
-                    // String clazzFile = instrumentedClasses.get(i);
 
-                    int minIndex = Math.min(i+numFiles, instrumentedClasses.size());
-                    String clazzFile = String.join(" ", instrumentedClasses.subList(i, minIndex));
-                    String jarOptions;
-                    if (i == 0) {
-                        jarOptions = "cvf";
-                    } else {
-                        jarOptions = "uf";
-                    }
+                // Batch jar all instrumented classes
+                String allClasses = String.join(" ", instrumentedClasses);
+                String cmd = "jar " + "cvf" + " " + jarName + " " + allClasses;
+                // Process p = Runtime.getRuntime().exec(cmd,
+                // null,
+                // new File(Slicer.SOOT_OUTPUT_STRING));
+                // AnalysisLogger.log(true, "Batch jar command: {}", cmd);
 
-                    Process p = Runtime.getRuntime().exec("jar " + jarOptions + " " + jarName + " " + clazzFile, null, new File(Slicer.SOOT_OUTPUT_STRING));
-                    p.waitFor();
-                    // String output = IOUtils.toString(p.getInputStream());
-                    // String errorOutput = IOUtils.toString(p.getErrorStream());
-                    // AnalysisLogger.log(true, "Process result {}", output + " " + errorOutput);
-                }
-                // Process p = Runtime.getRuntime().exec("jar cvf " + jarName + " " + String.join(" ", instrumentedClasses), null, new File(Slicer.SOOT_OUTPUT_STRING));
+                // // Write command to shell script
+                // try (java.io.PrintWriter writer = new java.io.PrintWriter("/app/cmd.sh")) {
+                // writer.println("#!/bin/bash");
+                // writer.println("cd " + Slicer.SOOT_OUTPUT_STRING); // Add cd command to
+                // ensure correct working
+                // // directory
+                // writer.println(cmd);
+                // }
+
+                // 直接执行 shell 脚本
+                ProcessBuilder pb = new ProcessBuilder(cmd);
+                pb.inheritIO(); // 自动处理所有输入输出流
+                Process p = pb.start();
+                p.waitFor();
+
+                /*
+                 * for (int i = 0; i < instrumentedClasses.size(); i += numFiles) {
+                 * // String clazzFile = instrumentedClasses.get(i);
+                 * 
+                 * int minIndex = Math.min(i + numFiles, instrumentedClasses.size());
+                 * String clazzFile = String.join(" ", instrumentedClasses.subList(i,
+                 * minIndex));
+                 * String jarOptions;
+                 * if (i == 0) {
+                 * jarOptions = "cvf";
+                 * } else {
+                 * jarOptions = "uf";
+                 * }
+                 * 
+                 * Process p = Runtime.getRuntime().exec("jar " + jarOptions + " " + jarName +
+                 * " " + clazzFile, null,
+                 * new File(Slicer.SOOT_OUTPUT_STRING));
+                 * AnalysisLogger.log(true, "Jar command: {}", "jar " + jarOptions + " " +
+                 * jarName + " " + clazzFile);
+                 * p.waitFor();
+                 * // String output = IOUtils.toString(p.getInputStream());
+                 * // String errorOutput = IOUtils.toString(p.getErrorStream());
+                 * // AnalysisLogger.log(true, "Process result {}", output + " " + errorOutput);
+                 * }
+                 */
+                // Process p = Runtime.getRuntime().exec("jar cvf " + jarName + " " +
+                // String.join(" ", instrumentedClasses), null, new
+                // File(Slicer.SOOT_OUTPUT_STRING));
                 // p.waitFor();
             }
 
@@ -347,7 +435,8 @@ public class JavaInstrumenter extends Instrumenter {
         ZipEntry zipEntry = zis.getNextEntry();
         while (zipEntry != null) {
             // AnalysisLogger.log(true, "Zip entry: {}", zipEntry);
-            if (!zipEntry.getName().endsWith("/") && !zipEntry.getName().endsWith(".class") && !zipEntry.getName().contains("META-INF")) {
+            if (!zipEntry.getName().endsWith("/") && !zipEntry.getName().endsWith(".class")
+                    && !zipEntry.getName().contains("META-INF")) {
                 // AnalysisLogger.log(true, "Copying: {}", zipEntry);
                 File newFile = new File(unzipDir + File.separator + zipEntry);
                 File parent = newFile.getParentFile();
@@ -367,7 +456,6 @@ public class JavaInstrumenter extends Instrumenter {
         zis.close();
     }
 
-
     public void listDirectory(String base, String dirPath, int level, List<String> files) {
         File dir = new File(dirPath);
         File[] firstLevelFiles = dir.listFiles();
@@ -377,6 +465,19 @@ public class JavaInstrumenter extends Instrumenter {
                     listDirectory(base, aFile.getAbsolutePath(), level + 1, files);
                 } else {
                     files.add(aFile.getAbsolutePath().substring(base.length())); // .replace("$", "\\$"));
+                }
+            }
+        }
+    }
+
+    private void findJarsInDir(File dir, List<File> jarFiles) {
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    findJarsInDir(file, jarFiles);
+                } else if (file.getName().endsWith(".jar")) {
+                    jarFiles.add(file);
                 }
             }
         }

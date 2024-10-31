@@ -213,7 +213,7 @@ public class Slicer {
     }
 
     public static void main(String [] args) {
-        AnalysisLogger.log(true, "Started Slicer4J");
+        AnalysisLogger.log(true, "Started Slicer4J **");
         long startTime = System.nanoTime();
         boolean justTrace = false;
         Map<String, String> commands = CommandParser.parse(args);
